@@ -63,11 +63,11 @@ macro_rules! make_params {
                 }
             )*
 
-            fn new() -> Self {
+            pub fn new() -> Self {
                 Default::default()
             }
 
-            fn build(&self) -> Result<$name, [<$name BuildError>]> {
+            pub fn build(&self) -> Result<$name, [<$name BuildError>]> {
                 let items = [<$name Items>] {
                     $(
                         $(#[cfg($cfg)])?
@@ -103,7 +103,7 @@ macro_rules! make_params {
                 }
             )*
 
-            fn builder() -> [<$name Builder>] {
+            pub fn builder() -> [<$name Builder>] {
                 [<$name Builder>]::new()
             }
         }
@@ -132,7 +132,7 @@ macro_rules! make_params {
                 $( "\n  _Available only if_ `cfg(", stringify!($cfg), ")`" )?
             )]
         )*
-        struct [<$name Builder>] {
+        pub struct [<$name Builder>] {
             $(
                 $(#[cfg($cfg)])?
                 $param_name: Option<$ty>,

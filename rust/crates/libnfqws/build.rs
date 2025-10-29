@@ -55,6 +55,6 @@ fn main() {
 
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     bindings
-        .write_to_file(out_path.join("libnfqws.rs"))
+        .write_to_file(out_path.join("sys_libnfqws.rs"))
         .expect("Couldn't write libnfqws");
 }

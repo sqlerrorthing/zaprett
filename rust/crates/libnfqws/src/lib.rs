@@ -1,2 +1,3 @@
-#![allow(warnings)]
-include!(concat!(env!("OUT_DIR"), "/libnfqws.rs"));
+pub(crate) mod sys_libnfqws;
+pub mod params;
+mod utils;

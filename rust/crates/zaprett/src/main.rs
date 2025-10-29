@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::{fs, path::Path};
 use sysctl::{CtlValue, Sysctl};
 use tokio::task;
-use libnfqws::nfqws_main;
 
 #[derive(Parser)]
 #[command(version)]

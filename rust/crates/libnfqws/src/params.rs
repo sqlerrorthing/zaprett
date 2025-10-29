@@ -15,7 +15,7 @@ use std::os::raw::{c_char, c_int};
 macro_rules! make_params {
     (
         $name:ident {
-            public: {
+            public$(($validator:expr))?: {
                 $(
                     $(#[doc = $doc:literal])+
                     $(#[cfg($cfg:meta)])?
@@ -128,15 +128,15 @@ macro_rules! make_params {
         }
     }};
 
-    (@join_doc [$($docs:literal)+]) => {
+    ( @join_doc [$($docs:literal)+] ) => {
         concat!($($docs, "\n  ")+)
     };
 
-    (@type_str $ty:ty, option) => { "Option<". stringify!($ty) .">" };
-    (@type_str $ty:ty, $id:ident) => { stringify!($ty) };
+    ( @type_str $ty:ty, option ) => { "Option<". stringify!($ty) .">" };
+    ( @type_str $ty:ty, $id:ident ) => { stringify!($ty) };
 
-    ( @type $ty:ty, option) => { Option<$ty> };
-    ( @type $ty:ty, $id:ident) => { $ty };
+    ( @type $ty:ty, option ) => { Option<$ty> };
+    ( @type $ty:ty, $id:ident ) => { $ty };
 
     ( @build_doc option, ) => { "Optional value, not required, default: None" };
     ( @build_doc def, $default:expr ) => { concat!("Not required, default: `", stringify!($default), "`") };

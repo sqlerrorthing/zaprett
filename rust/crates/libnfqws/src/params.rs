@@ -37,6 +37,19 @@ macro_rules! make_params {
 
         #[derive(Clone, Default)]
         #[allow(dead_code)]
+        #[doc = concat!("A builder for [`",stringify!($name) ,"`]")]
+        $(
+            #[doc = concat!(
+                "* [`",
+                stringify!($param_name),
+                "`](",
+                make_params!{@type_str $ty, $none_action},
+                "):",
+                make_params!{@join_doc [$($doc)+]},
+                make_params!{ @build_doc $none_action, $($default)? },
+                $( "\n  _Available only if_ `cfg(", stringify!($cfg), ")`" )?
+            )]
+        )*
         struct [<$name Builder>] {
             $(
                 $(#[cfg($cfg)])?
@@ -96,7 +109,7 @@ macro_rules! make_params {
                 $(#[doc = $doc])+
                 $(#[cfg($cfg)])?
                 pub fn $param_name(&self) -> &make_params!{@type $ty, $none_action} {
-                    &self.inner.$param_name.
+                    &self.inner.$param_name
                 }
             )*
 
@@ -115,8 +128,20 @@ macro_rules! make_params {
         }
     }};
 
+    (@join_doc [$($docs:literal)+]) => {
+        concat!($($docs, "\n  ")+)
+    };
+
+    (@type_str $ty:ty, option) => { "Option<". stringify!($ty) .">" };
+    (@type_str $ty:ty, $id:ident) => { stringify!($ty) };
+
     ( @type $ty:ty, option) => { Option<$ty> };
     ( @type $ty:ty, $id:ident) => { $ty };
+
+    ( @build_doc option, ) => { "Optional value, not required, default: None" };
+    ( @build_doc def, $default:expr ) => { concat!("Not required, default: `", stringify!($default), "`") };
+    ( @build_doc def_itself, ) => { "Not required, default: [`Default::default()`]" };
+    ( @build_doc required, ) => { "**Required**" };
 
     ( @build $name:ident, $value:expr, $config:expr, option, ) => { $value };
     ( @build $name:ident, $value:expr, $config:expr, def, $default:expr ) => { $value.unwrap_or($default) };

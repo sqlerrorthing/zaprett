@@ -4,6 +4,10 @@ use pastey::paste;
 use std::ffi::c_uint;
 use std::net::IpAddr;
 use std::os::raw::{c_char, c_int};
+use std::time::Duration;
+use bitflags::bitflags;
+use derive_new::new;
+use thiserror::Error;
 
 /// The `make_params!` macro is used to generate parameter structs in two "modes":
 /// - **public** — a struct intended for use in Rust code.
@@ -15,7 +19,7 @@ use std::os::raw::{c_char, c_int};
 macro_rules! make_params {
     (
         $name:ident {
-            public$(($validator:expr))?: {
+            public: {
                 $(
                     $(#[doc = $doc:literal])+
                     $(#[cfg($cfg:meta)])?
@@ -35,26 +39,10 @@ macro_rules! make_params {
             inner: [<$name Items>]
         }
 
-        #[derive(Clone, Default)]
-        #[allow(dead_code)]
-        #[doc = concat!("A builder for [`",stringify!($name) ,"`]")]
-        $(
-            #[doc = concat!(
-                "* [`",
-                stringify!($param_name),
-                "`](",
-                make_params!{@type_str $ty, $none_action},
-                "):",
-                make_params!{@join_doc [$($doc)+]},
-                make_params!{ @build_doc $none_action, $($default)? },
-                $( "\n  _Available only if_ `cfg(", stringify!($cfg), ")`" )?
-            )]
-        )*
-        struct [<$name Builder>] {
-            $(
-                $(#[cfg($cfg)])?
-                $param_name: Option<$ty>,
-            )*
+        #[derive(Debug, Error)]
+        pub enum [<$name BuildError>] {
+            #[error("value '{0}' required, but not present")]
+            MissingRequiredValue(&'static str)
         }
 
         #[allow(dead_code)]
@@ -79,17 +67,19 @@ macro_rules! make_params {
                 Default::default()
             }
 
-            fn build(&self) -> $name {
-                let config = [<$name Items>] {
+            fn build(&self) -> Result<$name, [<$name BuildError>]> {
+                let items = [<$name Items>] {
                     $(
                         $(#[cfg($cfg)])?
-                        $param_name: make_params!{ @build $param_name, self.$param_name.clone(), &config, $none_action, $($default)? },
+                        $param_name: make_params!{ @build $name, $param_name, self.$param_name.clone(), &config, $none_action, $($default)? },
                     )*
                 };
 
-                $name {
-                    inner: config
-                }
+                let config = $name {
+                    inner: items
+                };
+
+                Ok(config)
             }
         }
 
@@ -126,30 +116,54 @@ macro_rules! make_params {
                 pub $ffi_param_name: $ffi_ty,
             )*
         }
+
+        #[derive(Clone, Default)]
+        #[allow(dead_code)]
+        #[doc = concat!("A builder for [`",stringify!($name) ,"`]")]
+        $(
+            #[doc = concat!(
+                "* [`",
+                stringify!($param_name),
+                "`](",
+                make_params!{@type_str $ty, $none_action},
+                "):",
+                make_params!{@join_doc [$($doc)+]}, "\n  ",
+                make_params!{ @build_doc $none_action, $($default)? },
+                $( "\n  _Available only if_ `cfg(", stringify!($cfg), ")`" )?
+            )]
+        )*
+        struct [<$name Builder>] {
+            $(
+                $(#[cfg($cfg)])?
+                $param_name: Option<$ty>,
+            )*
+        }
     }};
 
     ( @join_doc [$($docs:literal)+] ) => {
-        concat!($($docs, "\n  ")+)
+        concat!($($docs, "\n  ",)+)
     };
 
-    ( @type_str $ty:ty, option ) => { "Option<". stringify!($ty) .">" };
+    ( @type_str $ty:ty, option ) => { concat!("Option<", stringify!($ty), ">") };
     ( @type_str $ty:ty, $id:ident ) => { stringify!($ty) };
 
     ( @type $ty:ty, option ) => { Option<$ty> };
     ( @type $ty:ty, $id:ident ) => { $ty };
 
-    ( @build_doc option, ) => { "Optional value, not required, default: None" };
+    ( @build_doc option, ) => { "Optional value, not required, default: [`None`]" };
     ( @build_doc def, $default:expr ) => { concat!("Not required, default: `", stringify!($default), "`") };
     ( @build_doc def_itself, ) => { "Not required, default: [`Default::default()`]" };
     ( @build_doc required, ) => { "**Required**" };
 
-    ( @build $name:ident, $value:expr, $config:expr, option, ) => { $value };
-    ( @build $name:ident, $value:expr, $config:expr, def, $default:expr ) => { $value.unwrap_or($default) };
-    ( @build $name:ident, $value:expr, $config:expr, def_itself, ) => { $value.unwrap_or_default() };
-    ( @build $name:ident, $value:expr, $config:expr, required, ) => {
-        $value.expect(concat!("Value ", stringify!($name), " is required, but not present."))
+    ( @build $name:ident, $param_name:ident, $value:expr, $config:expr, option, ) => { $value };
+    ( @build $name:ident, $param_name:ident, $value:expr, $config:expr, def, $default:expr ) => { $value.unwrap_or($default) };
+    ( @build $name:ident, $param_name:ident, $value:expr, $config:expr, def_itself, ) => { $value.unwrap_or_default() };
+    ( @build $name:ident, $param_name:ident, $value:expr, $config:expr, required, ) => {
+        paste! {
+            $value.ok_or([<$name BuildError>]::MissingRequiredValue(stringify!($param_name)))?
+        }
     };
-    ( @build $name:ident, $value:expr, $config:expr, auto, $default_fn:expr ) => {{
+    ( @build $name:ident, $param_name:ident, $value:expr, $config:expr, auto, $default_fn:expr ) => {{
         paste! {
             match $value {
                 Some(v) => v,
@@ -160,7 +174,7 @@ macro_rules! make_params {
             }
         }
     }};
-    ( @build $name:ident, $value:expr, $config:expr, generated, $default_fn:expr ) => {{
+    ( @build $name:ident, $param_name:ident, $value:expr, $config:expr, generated, $default_fn:expr ) => {{
         paste! {
             let f: &dyn Fn(&[<$name Items>]) -> _ = &$default_fn;
             f($config)
@@ -225,10 +239,100 @@ impl From<Bind> for RawBind {
     }
 }
 
+bitflags! {
+    #[derive(Debug, Copy, Clone)]
+    pub struct BindFix: u8 {
+        const V1 = 1 << 1;
+        const V2 = 1 << 2;
+    }
+}
+
+#[derive(Debug, Clone, new)]
+pub struct ConnTrackTimeouts {
+    pub syn: Duration,
+    pub established: Duration,
+    pub fin: Duration,
+    pub udp: Option<Duration>
+}
+
+#[derive(Debug, Clone, new)]
+pub struct WindowSize {
+    pub size: u32,
+    pub scale_factor: Option<u32>
+}
+
+impl WindowSize {
+    pub fn size(size: u32) -> Self {
+        Self {
+            size,
+            scale_factor: Some(0)
+        }
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Copy, Clone)]
+    pub struct WindowSizeCutoff: u8 {
+        const OutgointPackets = 1 << 1;
+        const DataPackets = 1 << 2;
+        const RelativeSequences = 1 << 3;
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum SynackSplit {
+    Sny,
+    SynAck,
+    AckSyn
+}
+
 make_params!(Params {
     public: {
-        /// Data folder |> Main data folder
-        data_folder: String, def, "data".to_string();
+        /// Trying to solve the problem of incorrect selection
+        /// of outgoing interface for generated ip packets
+        bind_fix: BindFix, option;
+
+        /// Number of the queue
+        queue: u16, option;
+
+        /// Timeouts for internal connection tacker
+        connection_tracker_timeouts:
+            ConnTrackTimeouts,
+            def, ConnTrackTimeouts::new(
+                Duration::from_mins(1),
+                Duration::from_mins(5),
+                Duration::from_mins(1),
+                Some(Duration::from_mins(1))
+            );
+
+        /// Change tcp window size in outgoing packets
+        window_size: WindowSize, option;
+
+        /// Change server window size in outgoing source packets,
+        /// data packets, relative to a sequence number less than N
+        window_size_cutoff: (WindowSizeCutoff, u32), option;
+
+        /// Automatically disable window size when
+        /// a known protocol is detected
+        window_size_forced_cutoff: bool, def, true;
+
+        /// Internal connection tracker enabled or disabled
+        connection_tracker: bool, def, false;
+
+        /// Ip cache lifetime. [`None`] - without limit
+        ipcache_lifetime: Duration, option;
+
+        /// Enable hostname caching for use in phase zero strategies
+        ipcache_hostname: bool, def, true;
+
+        /// Change process uid
+        user: String, option;
+
+        /// Change process uid
+        uid: u16, option;
+
+        /// Change process gid
+        gid: u16, option;
     },
     ffi: {
         #[cfg(not(any(target_os = "openbsd", target_os = "android")))]

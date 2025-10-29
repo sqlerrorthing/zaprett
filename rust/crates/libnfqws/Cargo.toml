@@ -7,6 +7,9 @@ repository.workspace = true
 [dependencies]
 pastey = "0.1.1"
 serde = { workspace = true }
+thiserror = { workspace = true }
+bitflags = { workspace = true }
+derive-new = "0.7.0"
 
 [build-dependencies]
 cc = "1.2.43"

@@ -267,6 +267,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
+name = "derive-new"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cdc8d50f426189eef89dac62fabfa0abb27d5cc008f25bf4156a0203325becc"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "dlv-list"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -446,11 +457,14 @@ name = "libnfqws"
 version = "0.0.1"
 dependencies = [
  "bindgen",
+ "bitflags",
  "cc",
+ "derive-new",
  "glob",
  "once_cell",
  "pastey",
  "serde",
+ "thiserror",
 ]
 
 [[package]]

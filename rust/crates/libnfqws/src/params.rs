@@ -9,6 +9,12 @@ use bitflags::bitflags;
 use derive_new::new;
 use thiserror::Error;
 
+#[derive(Debug, Error)]
+pub enum BuildError {
+    #[error("value '{0}' required, but not present")]
+    MissingRequiredValue(&'static str)
+}
+
 /// The `make_params!` macro is used to generate parameter structs in two "modes":
 /// - **public** — a struct intended for use in Rust code.
 /// - **ffi** — a "raw" struct suitable for FFI.
@@ -39,39 +45,21 @@ macro_rules! make_params {
             inner: [<$name Items>]
         }
 
-        #[derive(Debug, Error)]
-        pub enum [<$name BuildError>] {
-            #[error("value '{0}' required, but not present")]
-            MissingRequiredValue(&'static str)
-        }
-
         #[allow(dead_code)]
         impl [<$name Builder>] {
             $(
-                $(#[doc = $doc])+
-                $(#[cfg($cfg)])?
-                pub fn $param_name(mut self, value: $ty) -> Self {
-                    self.[<$param_name _mut>](value);
-                    self
-                }
-
-                $(#[doc = $doc])+
-                $(#[cfg($cfg)])?
-                pub fn [<$param_name _mut>](&mut self, value: $ty) -> &mut Self {
-                    self.$param_name = Some(value);
-                    self
-                }
+                make_params!{ @make_set $($doc)+, $($cfg:meta)?, $param_name, $ty, $none_action }
             )*
 
             pub fn new() -> Self {
                 Default::default()
             }
 
-            pub fn build(&self) -> Result<$name, [<$name BuildError>]> {
+            pub fn build(&self) -> Result<$name, BuildError> {
                 let items = [<$name Items>] {
                     $(
                         $(#[cfg($cfg)])?
-                        $param_name: make_params!{ @build $name, $param_name, self.$param_name.clone(), &config, $none_action, $($default)? },
+                        $param_name: make_params!{ @build $name, $param_name, self.$param_name.clone(), &self, $none_action, $($default)? },
                     )*
                 };
 
@@ -128,7 +116,7 @@ macro_rules! make_params {
                 make_params!{@type_str $ty, $none_action},
                 "):",
                 make_params!{@join_doc [$($doc)+]}, "\n  ",
-                make_paramscu!{ @build_doc $none_action, $($default)? },
+                make_params!{ @build_doc $none_action, $($default)? },
                 $( "\n  _Available only if_ `cfg(", stringify!($cfg), ")`" )?
             )]
         )*
@@ -150,36 +138,60 @@ macro_rules! make_params {
     ( @type $ty:ty, option ) => { Option<$ty> };
     ( @type $ty:ty, $id:ident ) => { $ty };
 
+    ( @make_set $($doc:literal)+, $($cfg:meta)?, $param_name:ident, $ty:ty, generated) => {
+
+    };
+
+    ( @make_set $($doc:literal)+, $($cfg:meta)?, $param_name:ident, $ty:ty, $id:ident) => {
+        paste! {
+            $(#[doc = $doc])+
+            $(#[cfg($cfg)])?
+            pub fn $param_name(mut self, value: $ty) -> Self {
+                self.[<$param_name _mut>](value);
+                self
+            }
+
+            $(#[doc = $doc])+
+            $(#[cfg($cfg)])?
+            pub fn [<$param_name _mut>](&mut self, value: $ty) -> &mut Self {
+                self.$param_name = Some(value);
+                self
+            }
+        }
+    };
+
     ( @build_doc option, ) => { "Optional value, not required, default: [`None`]" };
     ( @build_doc def, $default:expr ) => { concat!("Not required, default: `", stringify!($default), "`") };
     ( @build_doc def_itself, ) => { "Not required, default: [`Default::default()`]" };
     ( @build_doc required, ) => { "**Required**" };
-    ( @build_doc auto, ) => { "Auto" };
-    ( @build_doc generated, $($default:expr)? ) => { "Generated" };
+    ( @build_doc auto, $($default:expr)? ) => { "Auto, if not preset it will be set to default, but it depended on current builder state" };
+    ( @build_doc generated, $($default:expr)? ) => { "Generated, not able to set" };
 
-    ( @build $name:ident, $param_name:ident, $value:expr, $config:expr, option, ) => { $value };
-    ( @build $name:ident, $param_name:ident, $value:expr, $config:expr, def, $default:expr ) => { $value.unwrap_or($default) };
-    ( @build $name:ident, $param_name:ident, $value:expr, $config:expr, def_itself, ) => { $value.unwrap_or_default() };
-    ( @build $name:ident, $param_name:ident, $value:expr, $config:expr, required, ) => {
+    ( @build $name:ident, $param_name:ident, $value:expr, $builder:expr, option, ) => { $value };
+    ( @build $name:ident, $param_name:ident, $value:expr, $builder:expr, def, $default:expr ) => { $value.unwrap_or($default) };
+    ( @build $name:ident, $param_name:ident, $value:expr, $builder:expr, def_itself, ) => { $value.unwrap_or_default() };
+    ( @build $name:ident, $param_name:ident, $value:expr, $builder:expr, required, ) => {
         paste! {
-            $value.ok_or([<$name BuildError>]::MissingRequiredValue(stringify!($param_name)))?
+            $value.ok_or(BuildError::MissingRequiredValue(stringify!($param_name)))?
         }
     };
-    ( @build $name:ident, $param_name:ident, $value:expr, $config:expr, auto, $default_fn:expr ) => {{
+
+    ( @build $name:ident, $param_name:ident, $value:expr, $builder:expr, auto, $default_fn:expr ) => {{
         paste! {
             match $value {
                 Some(v) => v,
                 None => {
-                    let f: &dyn Fn(&[<$name Items>]) -> _ = &$default_fn;
-                    f($config)
+                    let f: &dyn Fn(&[<$name Builder>]) -> _ = &$default_fn;
+                    f($builder)
                 }
             }
         }
     }};
-    ( @build $name:ident, $param_name:ident, $value:expr, $config:expr, generated, $default_fn:expr ) => {{
+
+    ( @build $name:ident, $param_name:ident, $value:expr, $builder:expr, generated, $default_fn:expr ) => {{
         paste! {
-            let f: &dyn Fn(&[<$name Items>]) -> _ = &$default_fn;
-            f($config)
+            let f: &dyn Fn(&[<$name Builder>]) -> _ = &$default_fn;
+            f($builder)
         }
     }};
 }
@@ -290,9 +302,9 @@ pub enum SynackSplit {
 
 #[derive(Debug, Clone, new)]
 pub struct AutoTTL {
-    delta: i32,
-    min: Option<u32>,
-    max: Option<u32>
+    pub delta: i32,
+    pub min: Option<u32>,
+    pub max: Option<u32>
 }
 
 make_params!(Params {
@@ -348,9 +360,9 @@ make_params!(Params {
         /// Auto TTL mode for ipv4
         modified_auto_ttl: AutoTTL, def, AutoTTL::new(5, Some(3), Some(64));
 
-        /// Auto TTL mode, only for ipv6
-        /// If not set, [`modified_auto_ttl`] will be used
-        modifier_auto_ttl_ip_v6: AutoTTL, auto, |c| c.modified_auto_ttl();
+        // Auto TTL mode, only for ipv6
+        // If not set, [`modified_auto_ttl`] will be used
+        // modifier_auto_ttl_ip_v6: AutoTTL, auto, |b| b.modified_auto_ttl.clone().unwrap();
 
         /// Change process uid
         user: String, option;

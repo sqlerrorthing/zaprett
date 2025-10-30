@@ -1,3 +1,4 @@
+use std::mem::MaybeUninit;
 use crate::sys_libnfqws::{gid_t, hostlist_files_head, ip_cache, ipset_files_head, log_target, sockaddr_in, sockaddr_in6, uid_t, wordexp_t, IF_NAMESIZE};
 use crate::utils::str_to_c_array;
 use pastey::paste;
@@ -45,6 +46,59 @@ macro_rules! make_params {
             inner: [<$name Items>]
         }
 
+        #[derive(Clone, Default)]
+        #[allow(dead_code)]
+        #[doc = concat!("A builder for [`", stringify!($name) ,"`]")]
+        $(
+            #[doc = concat!(
+                "* [`",
+                stringify!($param_name),
+                "`](",
+                make_params!{ @type_str $ty, $none_action },
+                "):",
+                make_params!{ @join_doc [$($doc)+] }, "\n  ",
+                make_params!{ @build_doc $none_action, $($default)? },
+                $( "\n  _Available only if_ `cfg(", stringify!($cfg), ")`" )?
+            )]
+        )*
+        pub struct [<$name Builder>] {
+            $(
+                $(#[cfg($cfg)])?
+                $param_name: Option<$ty>,
+            )*
+        }
+
+        struct [<$name ItemsIntermediate>] {
+            $(
+                $(#[cfg($cfg)])?
+                $param_name: MaybeUninit<make_params!{ @type $ty, $none_action }>,
+            )*
+        }
+
+        impl [<$name ItemsIntermediate>] {
+            fn assume_init(self) -> [<$name Items>] {
+                unsafe {
+                    [<$name Items>] {
+                        $(
+                            $(#[cfg($cfg)])?
+                            $param_name: self.$param_name.assume_init(),
+                        )*
+                    }
+                }
+            }
+        }
+
+        impl Default for [<$name ItemsIntermediate>] {
+            fn default() -> Self {
+                Self {
+                    $(
+                        $(#[cfg($cfg)])?
+                        $param_name: MaybeUninit::uninit(),
+                    )*
+                }
+            }
+        }
+
         #[allow(dead_code)]
         impl [<$name Builder>] {
             $(
@@ -56,15 +110,15 @@ macro_rules! make_params {
             }
 
             pub fn build(&self) -> Result<$name, BuildError> {
-                let items = [<$name Items>] {
-                    $(
-                        $(#[cfg($cfg)])?
-                        $param_name: make_params!{ @build $name, $param_name, self.$param_name.clone(), &self, $none_action, $($default)? },
-                    )*
-                };
+                let mut intermediate = [<$name ItemsIntermediate>]::default();
+
+                $(
+                    $(#[cfg($cfg)])?
+                    intermediate.$param_name = MaybeUninit::new(make_params!{ @build $name, $param_name, self.$param_name.clone(), &intermediate, $none_action, $($default)? });
+                )*
 
                 let config = $name {
-                    inner: items
+                    inner: intermediate.assume_init()
                 };
 
                 Ok(config)
@@ -104,28 +158,6 @@ macro_rules! make_params {
                 pub $ffi_param_name: $ffi_ty,
             )*
         }
-
-        #[derive(Clone, Default)]
-        #[allow(dead_code)]
-        #[doc = concat!("A builder for [`",stringify!($name) ,"`]")]
-        $(
-            #[doc = concat!(
-                "* [`",
-                stringify!($param_name),
-                "`](",
-                make_params!{@type_str $ty, $none_action},
-                "):",
-                make_params!{@join_doc [$($doc)+]}, "\n  ",
-                make_params!{ @build_doc $none_action, $($default)? },
-                $( "\n  _Available only if_ `cfg(", stringify!($cfg), ")`" )?
-            )]
-        )*
-        pub struct [<$name Builder>] {
-            $(
-                $(#[cfg($cfg)])?
-                $param_name: Option<$ty>,
-            )*
-        }
     }};
 
     ( @join_doc [$($docs:literal)+] ) => {
@@ -139,7 +171,7 @@ macro_rules! make_params {
     ( @type $ty:ty, $id:ident ) => { $ty };
 
     ( @make_set $($doc:literal)+, $($cfg:meta)?, $param_name:ident, $ty:ty, generated) => {
-
+        // Cause generated, not able to set
     };
 
     ( @make_set $($doc:literal)+, $($cfg:meta)?, $param_name:ident, $ty:ty, $id:ident) => {
@@ -167,31 +199,31 @@ macro_rules! make_params {
     ( @build_doc auto, $($default:expr)? ) => { "Auto, if not preset it will be set to default, but it depended on current builder state" };
     ( @build_doc generated, $($default:expr)? ) => { "Generated, not able to set" };
 
-    ( @build $name:ident, $param_name:ident, $value:expr, $builder:expr, option, ) => { $value };
-    ( @build $name:ident, $param_name:ident, $value:expr, $builder:expr, def, $default:expr ) => { $value.unwrap_or($default) };
-    ( @build $name:ident, $param_name:ident, $value:expr, $builder:expr, def_itself, ) => { $value.unwrap_or_default() };
-    ( @build $name:ident, $param_name:ident, $value:expr, $builder:expr, required, ) => {
+    ( @build $name:ident, $param_name:ident, $value:expr, $intermediate:expr, option, ) => { $value };
+    ( @build $name:ident, $param_name:ident, $value:expr, $intermediate:expr, def, $default:expr ) => { $value.unwrap_or($default) };
+    ( @build $name:ident, $param_name:ident, $value:expr, $intermediate:expr, def_itself, ) => { $value.unwrap_or_default() };
+    ( @build $name:ident, $param_name:ident, $value:expr, $intermediate:expr, required, ) => {
         paste! {
             $value.ok_or(BuildError::MissingRequiredValue(stringify!($param_name)))?
         }
     };
 
-    ( @build $name:ident, $param_name:ident, $value:expr, $builder:expr, auto, $default_fn:expr ) => {{
+    ( @build $name:ident, $param_name:ident, $value:expr, $intermediate:expr, auto, $default_fn:expr ) => {{
         paste! {
             match $value {
                 Some(v) => v,
                 None => {
-                    let f: &dyn Fn(&[<$name Builder>]) -> _ = &$default_fn;
-                    f($builder)
+                    let f: &dyn Fn(&[<$name ItemsIntermediate>]) -> _ = &$default_fn;
+                    f($intermediate)
                 }
             }
         }
     }};
 
-    ( @build $name:ident, $param_name:ident, $value:expr, $builder:expr, generated, $default_fn:expr ) => {{
+    ( @build $name:ident, $param_name:ident, $value:expr, $intermediate:expr, generated, $default_fn:expr ) => {{
         paste! {
-            let f: &dyn Fn(&[<$name Builder>]) -> _ = &$default_fn;
-            f($builder)
+            let f: &dyn Fn(&[<$name ItemsIntermediate>]) -> _ = &$default_fn;
+            f($intermediate)
         }
     }};
 }
@@ -269,6 +301,17 @@ pub struct ConnTrackTimeouts {
     pub udp: Option<Duration>
 }
 
+impl Default for ConnTrackTimeouts {
+    fn default() -> Self {
+        ConnTrackTimeouts::new(
+            Duration::from_mins(1),
+            Duration::from_mins(5),
+            Duration::from_mins(1),
+            Some(Duration::from_mins(1))
+        )
+    }
+}
+
 #[derive(Debug, Clone, new)]
 pub struct WindowSize {
     pub size: u32,
@@ -307,6 +350,12 @@ pub struct AutoTTL {
     pub max: Option<u32>
 }
 
+impl Default for AutoTTL {
+    fn default() -> Self {
+        AutoTTL::new(5, Some(3), Some(64))
+    }
+}
+
 make_params!(Params {
     public: {
         /// Trying to solve the problem of incorrect selection
@@ -317,14 +366,7 @@ make_params!(Params {
         queue: u16, option;
 
         /// Timeouts for internal connection tacker
-        connection_tracker_timeouts:
-            ConnTrackTimeouts,
-            def, ConnTrackTimeouts::new(
-                Duration::from_mins(1),
-                Duration::from_mins(5),
-                Duration::from_mins(1),
-                Some(Duration::from_mins(1))
-            );
+        connection_tracker_timeouts: ConnTrackTimeouts, def_itself;
 
         /// Change tcp window size in outgoing packets
         window_size: WindowSize, option;
@@ -353,16 +395,19 @@ make_params!(Params {
         /// Modify original packet TTL
         modified_tll: u16, option;
 
-        /// Modify original IPv6 packets hop limit.
+        /// Modify the original IPv6 packets hop limit.
         /// If not provided, [`modified_ttl`] will be used
         modified_ttl_ip_v6: u16, option;
 
         /// Auto TTL mode for ipv4
-        modified_auto_ttl: AutoTTL, def, AutoTTL::new(5, Some(3), Some(64));
+        modified_auto_ttl: AutoTTL, def_itself;
 
-        // Auto TTL mode, only for ipv6
-        // If not set, [`modified_auto_ttl`] will be used
-        // modifier_auto_ttl_ip_v6: AutoTTL, auto, |b| b.modified_auto_ttl.clone().unwrap();
+        /// Auto TTL mode, only for ipv6
+        /// If not set, [`modified_auto_ttl`] will be used
+        modifier_auto_ttl_ip_v6: AutoTTL, auto, |ir| {
+            // Safety: modified_auto_ttl already initialized
+            unsafe { ir.modified_auto_ttl.assume_init_ref().clone() }
+        };
 
         /// Change process uid
         user: String, option;

@@ -128,7 +128,7 @@ macro_rules! make_params {
                 make_params!{@type_str $ty, $none_action},
                 "):",
                 make_params!{@join_doc [$($doc)+]}, "\n  ",
-                make_params!{ @build_doc $none_action, $($default)? },
+                make_paramscu!{ @build_doc $none_action, $($default)? },
                 $( "\n  _Available only if_ `cfg(", stringify!($cfg), ")`" )?
             )]
         )*
@@ -154,6 +154,8 @@ macro_rules! make_params {
     ( @build_doc def, $default:expr ) => { concat!("Not required, default: `", stringify!($default), "`") };
     ( @build_doc def_itself, ) => { "Not required, default: [`Default::default()`]" };
     ( @build_doc required, ) => { "**Required**" };
+    ( @build_doc auto, ) => { "Auto" };
+    ( @build_doc generated, $($default:expr)? ) => { "Generated" };
 
     ( @build $name:ident, $param_name:ident, $value:expr, $config:expr, option, ) => { $value };
     ( @build $name:ident, $param_name:ident, $value:expr, $config:expr, def, $default:expr ) => { $value.unwrap_or($default) };
@@ -286,6 +288,13 @@ pub enum SynackSplit {
     AckSyn
 }
 
+#[derive(Debug, Clone, new)]
+pub struct AutoTTL {
+    delta: i32,
+    min: Option<u32>,
+    max: Option<u32>
+}
+
 make_params!(Params {
     public: {
         /// Trying to solve the problem of incorrect selection
@@ -324,6 +333,24 @@ make_params!(Params {
 
         /// Enable hostname caching for use in phase zero strategies
         ipcache_hostname: bool, def, true;
+
+        /// Do tcp handshake
+        /// Instead of SYN,ACK send only SYN, SYN+ACK or ACK+SYN
+        synack_split: SynackSplit, option;
+
+        /// Modify original packet TTL
+        modified_tll: u16, option;
+
+        /// Modify original IPv6 packets hop limit.
+        /// If not provided, [`modified_ttl`] will be used
+        modified_ttl_ip_v6: u16, option;
+
+        /// Auto TTL mode for ipv4
+        modified_auto_ttl: AutoTTL, def, AutoTTL::new(5, Some(3), Some(64));
+
+        /// Auto TTL mode, only for ipv6
+        /// If not set, [`modified_auto_ttl`] will be used
+        modifier_auto_ttl_ip_v6: AutoTTL, auto, |c| c.modified_auto_ttl();
 
         /// Change process uid
         user: String, option;

@@ -16,6 +16,8 @@ pub enum BuildError {
     MissingRequiredValue(&'static str)
 }
 
+trait AssertFromImplemented<T>: From<T> {}
+
 /// The `make_params!` macro is used to generate parameter structs in two "modes":
 /// - **public** — a struct intended for use in Rust code.
 /// - **ffi** — a "raw" struct suitable for FFI.
@@ -158,6 +160,8 @@ macro_rules! make_params {
                 pub $ffi_param_name: $ffi_ty,
             )*
         }
+
+        impl AssertFromImplemented<$name> for [<Raw $name>] {}
     }};
 
     ( @join_doc [$($docs:literal)+] ) => {
@@ -353,6 +357,12 @@ pub struct AutoTTL {
 impl Default for AutoTTL {
     fn default() -> Self {
         AutoTTL::new(5, Some(3), Some(64))
+    }
+}
+
+impl From<Params> for RawParams {
+    fn from(_value: Params) -> Self {
+        todo!()
     }
 }
 
